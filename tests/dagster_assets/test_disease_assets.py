@@ -1,7 +1,7 @@
 import polars as pl
 from unittest.mock import patch, MagicMock
 from dagster import build_asset_context
-from dagster_assets.primekg_similar_names import filter_disease_nodes, disease_descriptions, disease_embeddings, disease_embeddings_viz
+from dagster_assets.primekg_similar_names import filter_disease_nodes, disease_descriptions, disease_embeddings, disease_embeddings_viz, disease_similarity_pairs
 
 
 def test_filter_disease_nodes(tmp_path, monkeypatch):
@@ -113,3 +113,33 @@ def test_disease_embeddings_viz(tmp_path, monkeypatch):
 
     assert result.exists()
     assert result.suffix == '.html'
+
+
+def test_disease_similarity_pairs(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    # Create input embeddings file with mock embeddings
+    embeddings_file = tmp_path / "embeddings.csv"
+    # Create embeddings that are similar
+    embedding1 = ','.join(['0.1'] * 5)
+    embedding2 = ','.join(['0.11'] * 5)  # Very similar to embedding1
+    embedding3 = ','.join(['0.9'] * 5)   # Different from others
+
+    df = pl.DataFrame({
+        'disease_name': ['hypertension', 'high blood pressure', 'diabetes'],
+        'description': ['desc1', 'desc2', 'desc3'],
+        'embedding': [embedding1, embedding2, embedding3]
+    })
+    df.write_csv(embeddings_file)
+
+    context = build_asset_context()
+    result = disease_similarity_pairs(context, embeddings_file)
+
+    assert result.exists()
+    df_pairs = pl.read_csv(result)
+    assert 'disease_1' in df_pairs.columns
+    assert 'disease_2' in df_pairs.columns
+    assert 'similarity' in df_pairs.columns
+    assert 'node_id_1' in df_pairs.columns
+    assert 'node_id_2' in df_pairs.columns
+    assert len(df_pairs) == 3  # 3 diseases = 3 pairs (3 choose 2)

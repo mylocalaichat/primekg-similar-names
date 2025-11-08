@@ -317,3 +317,72 @@ def disease_embeddings_viz(context: AssetExecutionContext, disease_embeddings: P
     context.log.info(f"Open in browser: {file_uri}")
 
     return output_path
+
+
+@asset(group_name="primekg_similar_names")
+def disease_similarity_pairs(context: AssetExecutionContext, disease_embeddings: Path) -> Path:
+    output_path = Path("primekg_similar_names/disease_similarity_pairs/asset_output/similar_pairs.csv")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    context.log.info("Reading embeddings CSV")
+    df = pl.read_csv(disease_embeddings)
+
+    # Filter out rows with empty embeddings
+    df = df.filter(pl.col("embedding") != "")
+
+    context.log.info(f"Computing similarity for {len(df)} disease pairs")
+
+    # Parse embeddings from comma-separated strings to numpy arrays
+    embeddings_list = []
+    disease_names = []
+
+    for row in df.iter_rows(named=True):
+        try:
+            embedding_str = row['embedding']
+            embedding = np.array([float(x) for x in embedding_str.split(',')])
+            embeddings_list.append(embedding)
+            disease_names.append(row['disease_name'])
+        except Exception as e:
+            context.log.warning(f"Failed to parse embedding for {row['disease_name']}: {e}")
+
+    if len(embeddings_list) < 2:
+        context.log.error("Not enough valid embeddings for similarity computation")
+        return output_path
+
+    embeddings_matrix = np.array(embeddings_list)
+    context.log.info(f"Embeddings matrix shape: {embeddings_matrix.shape}")
+
+    # Normalize embeddings for cosine similarity
+    from sklearn.metrics.pairwise import cosine_similarity
+    context.log.info("Computing cosine similarity between all pairs")
+    similarity_matrix = cosine_similarity(embeddings_matrix)
+
+    # Extract all pairs with their similarity scores
+    pairs_data = []
+    n = len(disease_names)
+
+    for i in range(n):
+        for j in range(i + 1, n):  # Only upper triangle to avoid duplicates
+            similarity = similarity_matrix[i, j]
+            pairs_data.append({
+                'disease_1': disease_names[i],
+                'disease_2': disease_names[j],
+                'similarity': similarity,
+                'node_id_1': i,
+                'node_id_2': j
+            })
+
+    # Create DataFrame and sort by similarity (descending)
+    pairs_df = pl.DataFrame(pairs_data).sort('similarity', descending=True)
+
+    # Write all pairs
+    pairs_df.write_csv(output_path)
+    context.log.info(f"Similarity pairs CSV saved to: {output_path.absolute()}")
+    context.log.info(f"File URI: file://{output_path.absolute()}")
+
+    # Log top 10 most similar pairs
+    context.log.info("\nTop 10 most similar disease pairs:")
+    for row in pairs_df.head(10).iter_rows(named=True):
+        context.log.info(f"  {row['similarity']:.4f} - {row['disease_1']} <-> {row['disease_2']}")
+
+    return output_path
