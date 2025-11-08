@@ -132,5 +132,6 @@ def disease_similarity_plot(context: AssetExecutionContext, disease_embeddings: 
     )
 
     fig.write_html(output_path)
+    context.log.info(f"HTML plot saved to: {output_path.absolute()}")
 
     return output_path
