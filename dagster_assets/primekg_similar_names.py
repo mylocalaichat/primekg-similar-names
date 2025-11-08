@@ -4,7 +4,8 @@ from pathlib import Path
 from dagster import AssetExecutionContext, asset
 from tqdm import tqdm
 import polars as pl
-import Levenshtein
+from rapidfuzz.distance import Levenshtein
+from rapidfuzz.process import cdist
 import plotly.express as px
 import numpy as np
 import torch
@@ -77,43 +78,66 @@ def disease_embeddings(context: AssetExecutionContext, filter_disease_nodes: Pat
 
     for batch_start in tqdm(range(0, n, batch_size), total=total_batches, desc="Computing distances"):
         batch_end = min(batch_start + batch_size, n)
+        batch_names = disease_names[batch_start:batch_end]
+        remaining_names = disease_names[batch_end:]
 
-        for row_idx in range(batch_start, batch_end):
-            for col_idx in range(row_idx + 1, n):
-                dist = Levenshtein.distance(disease_names[row_idx], disease_names[col_idx])
-                distance_matrix[row_idx, col_idx] = dist
-                distance_matrix[col_idx, row_idx] = dist
+        batch_dists = cdist(batch_names, remaining_names, scorer=Levenshtein.distance, workers=-1)
+        distance_matrix[batch_start:batch_end, batch_end:] = batch_dists
+        distance_matrix[batch_end:, batch_start:batch_end] = batch_dists.T
 
     context.log.info("Running MDS dimensionality reduction with PyTorch")
 
     if torch.cuda.is_available():
         device = torch.device('cuda')
+    elif torch.backends.mps.is_available():
+        device = torch.device('mps')
     else:
         device = torch.device('cpu')
+
     context.log.info(f"Using device: {device}")
 
-    dist_tensor = torch.from_numpy(distance_matrix).to(device)
+    try:
+        dist_tensor = torch.from_numpy(distance_matrix).to(device)
+        embeddings = torch.randn(n, 2, device=device, requires_grad=True)
+        optimizer = torch.optim.Adam([embeddings], lr=1.0)
 
-    embeddings = torch.randn(n, 2, device=device, requires_grad=True)
-    optimizer = torch.optim.Adam([embeddings], lr=1.0)
+        for _ in tqdm(range(300), desc="MDS iterations"):
+            optimizer.zero_grad()
 
-    for _ in tqdm(range(300), desc="MDS iterations"):
-        optimizer.zero_grad()
+            embedded_dist = torch.cdist(embeddings, embeddings)
+            stress = torch.sum((embedded_dist - dist_tensor) ** 2)
 
-        embedded_dist = torch.cdist(embeddings, embeddings)
-        stress = torch.sum((embedded_dist - dist_tensor) ** 2)
+            stress.backward()
+            optimizer.step()
 
-        stress.backward()
-        optimizer.step()
+        embeddings_np = embeddings.detach().cpu().numpy()
+    except NotImplementedError as e:
+        if 'cdist_backward' in str(e) and device.type == 'mps':
+            context.log.warning("MPS doesn't support cdist backward, falling back to CPU")
+            device = torch.device('cpu')
+            dist_tensor = torch.from_numpy(distance_matrix).to(device)
+            embeddings = torch.randn(n, 2, device=device, requires_grad=True)
+            optimizer = torch.optim.Adam([embeddings], lr=1.0)
 
-    embeddings = embeddings.detach().cpu().numpy()
+            for _ in tqdm(range(300), desc="MDS iterations (CPU)"):
+                optimizer.zero_grad()
+
+                embedded_dist = torch.cdist(embeddings, embeddings)
+                stress = torch.sum((embedded_dist - dist_tensor) ** 2)
+
+                stress.backward()
+                optimizer.step()
+
+            embeddings_np = embeddings.detach().cpu().numpy()
+        else:
+            raise
 
     distance_matrix[distance_matrix == 0] = np.inf
     min_distances = distance_matrix.min(axis=1)
 
     df = df.with_columns([
-        pl.Series("x", embeddings[:, 0]),
-        pl.Series("y", embeddings[:, 1]),
+        pl.Series("x", embeddings_np[:, 0]),
+        pl.Series("y", embeddings_np[:, 1]),
         pl.Series("min_distance", min_distances)
     ])
 
