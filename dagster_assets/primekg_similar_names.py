@@ -1,10 +1,14 @@
 import requests
+import shutil
 from pathlib import Path
 from dagster import AssetExecutionContext, asset
 from tqdm import tqdm
 
 
 def download_file(url: str, output_path: Path) -> Path:
+    if output_path.parent.exists():
+        shutil.rmtree(output_path.parent)
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     response = requests.get(url, stream=True)
@@ -20,8 +24,8 @@ def download_file(url: str, output_path: Path) -> Path:
     return output_path
 
 
-@asset(group_name="download_data")
+@asset(group_name="primekg_similar_names")
 def download_kg(context: AssetExecutionContext) -> Path:
     url = "https://dataverse.harvard.edu/api/access/datafile/6180620"
-    output_path = Path("download_data/asset_output/kg.csv")
+    output_path = Path("primekg_similar_names/download_kg/asset_output/kg.csv")
     return download_file(url, output_path)

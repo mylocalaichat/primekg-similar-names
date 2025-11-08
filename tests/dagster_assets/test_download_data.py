@@ -1,7 +1,7 @@
 from pathlib import Path
 from unittest.mock import Mock, mock_open
 import pytest
-from dagster_assets.download_data import download_file
+from dagster_assets.primekg_similar_names import download_file
 
 
 def test_download_file(mocker):
@@ -11,7 +11,8 @@ def test_download_file(mocker):
 
     mocker.patch('requests.get', return_value=mock_response)
     mocker.patch('builtins.open', mock_open())
-    mocker.patch('dagster_assets.download_data.tqdm')
+    mocker.patch('dagster_assets.primekg_similar_names.tqdm')
+    mocker.patch('dagster_assets.primekg_similar_names.shutil.rmtree')
 
     url = "https://example.com/file.csv"
     output_path = Path("test_output/test.csv")
@@ -27,6 +28,7 @@ def test_download_file_raises_on_error(mocker):
     mock_response.raise_for_status.side_effect = Exception("Download failed")
 
     mocker.patch('requests.get', return_value=mock_response)
+    mocker.patch('dagster_assets.primekg_similar_names.shutil.rmtree')
 
     url = "https://example.com/file.csv"
     output_path = Path("test_output/test.csv")
