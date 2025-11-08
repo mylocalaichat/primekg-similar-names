@@ -8,7 +8,7 @@ from rapidfuzz.distance import Levenshtein
 from rapidfuzz.process import cdist
 import plotly.express as px
 import numpy as np
-import torch
+from sklearn.decomposition import TruncatedSVD
 
 
 def download_file(url: str, output_path: Path) -> Path:
@@ -85,59 +85,18 @@ def disease_embeddings(context: AssetExecutionContext, filter_disease_nodes: Pat
         distance_matrix[batch_start:batch_end, batch_end:] = batch_dists
         distance_matrix[batch_end:, batch_start:batch_end] = batch_dists.T
 
-    context.log.info("Running MDS dimensionality reduction with PyTorch")
+    context.log.info("Converting distances to 2D coordinates with SVD")
 
-    if torch.cuda.is_available():
-        device = torch.device('cuda')
-    elif torch.backends.mps.is_available():
-        device = torch.device('mps')
-    else:
-        device = torch.device('cpu')
-
-    context.log.info(f"Using device: {device}")
-
-    try:
-        dist_tensor = torch.from_numpy(distance_matrix).to(device)
-        embeddings = torch.randn(n, 2, device=device, requires_grad=True)
-        optimizer = torch.optim.Adam([embeddings], lr=1.0)
-
-        for _ in tqdm(range(300), desc="MDS iterations"):
-            optimizer.zero_grad()
-
-            embedded_dist = torch.cdist(embeddings, embeddings)
-            stress = torch.sum((embedded_dist - dist_tensor) ** 2)
-
-            stress.backward()
-            optimizer.step()
-
-        embeddings_np = embeddings.detach().cpu().numpy()
-    except NotImplementedError as e:
-        if 'cdist_backward' in str(e) and device.type == 'mps':
-            context.log.warning("MPS doesn't support cdist backward, falling back to CPU")
-            device = torch.device('cpu')
-            dist_tensor = torch.from_numpy(distance_matrix).to(device)
-            embeddings = torch.randn(n, 2, device=device, requires_grad=True)
-            optimizer = torch.optim.Adam([embeddings], lr=1.0)
-
-            for _ in tqdm(range(300), desc="MDS iterations (CPU)"):
-                optimizer.zero_grad()
-
-                embedded_dist = torch.cdist(embeddings, embeddings)
-                stress = torch.sum((embedded_dist - dist_tensor) ** 2)
-
-                stress.backward()
-                optimizer.step()
-
-            embeddings_np = embeddings.detach().cpu().numpy()
-        else:
-            raise
+    # Use TruncatedSVD for fast approximation
+    svd = TruncatedSVD(n_components=2, random_state=42)
+    embeddings = svd.fit_transform(distance_matrix)
 
     distance_matrix[distance_matrix == 0] = np.inf
     min_distances = distance_matrix.min(axis=1)
 
     df = df.with_columns([
-        pl.Series("x", embeddings_np[:, 0]),
-        pl.Series("y", embeddings_np[:, 1]),
+        pl.Series("x", embeddings[:, 0]),
+        pl.Series("y", embeddings[:, 1]),
         pl.Series("min_distance", min_distances)
     ])
 
