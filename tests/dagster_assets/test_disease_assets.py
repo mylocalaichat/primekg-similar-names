@@ -1,9 +1,7 @@
-from pathlib import Path
-import pytest
 import polars as pl
-import os
+from unittest.mock import patch
 from dagster import build_asset_context
-from dagster_assets.primekg_similar_names import filter_disease_nodes
+from dagster_assets.primekg_similar_names import filter_disease_nodes, disease_descriptions
 
 
 def test_filter_disease_nodes(tmp_path, monkeypatch):
@@ -24,3 +22,29 @@ def test_filter_disease_nodes(tmp_path, monkeypatch):
     assert 'disease_name' in df.columns
     assert len(df) == 2
     assert set(df['disease_name'].to_list()) == {'diabetes', 'hypertension'}
+
+
+def test_disease_descriptions(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    diseases_file = tmp_path / "diseases.csv"
+    df = pl.DataFrame({'disease_name': ['hypertension', 'diabetes']})
+    df.write_csv(diseases_file)
+
+    # Mock ollama.chat to avoid actual API calls
+    mock_response = {
+        'message': {
+            'content': 'A chronic condition characterized by high blood pressure.'
+        }
+    }
+
+    with patch('ollama.chat', return_value=mock_response):
+        context = build_asset_context()
+        result = disease_descriptions(context, diseases_file)
+
+        assert result.exists()
+        df_descriptions = pl.read_csv(result)
+        assert 'disease_name' in df_descriptions.columns
+        assert 'description' in df_descriptions.columns
+        assert len(df_descriptions) == 2
+        assert set(df_descriptions['disease_name'].to_list()) == {'diabetes', 'hypertension'}
