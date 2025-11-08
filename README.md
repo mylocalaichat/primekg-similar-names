@@ -1,4 +1,5 @@
 # PrimeKG Similar Names
+**this project is abandoned and no longer maintained**
 
 ## Launch
 

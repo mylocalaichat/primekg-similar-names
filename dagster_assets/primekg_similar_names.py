@@ -386,3 +386,131 @@ def disease_similarity_pairs(context: AssetExecutionContext, disease_embeddings:
         context.log.info(f"  {row['similarity']:.4f} - {row['disease_1']} <-> {row['disease_2']}")
 
     return output_path
+
+
+@asset(group_name="primekg_similar_names")
+def disease_clusters(context: AssetExecutionContext, disease_embeddings: Path) -> Path:
+    output_path = Path("primekg_similar_names/disease_clusters/asset_output/disease_clusters.csv")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    context.log.info("Reading embeddings CSV")
+    df = pl.read_csv(disease_embeddings)
+
+    # Filter out rows with empty embeddings
+    df = df.filter(pl.col("embedding") != "")
+
+    context.log.info(f"Clustering {len(df)} diseases")
+
+    # Parse embeddings from comma-separated strings to numpy arrays
+    embeddings_list = []
+    disease_names = []
+
+    for row in df.iter_rows(named=True):
+        try:
+            embedding_str = row['embedding']
+            embedding = np.array([float(x) for x in embedding_str.split(',')])
+            embeddings_list.append(embedding)
+            disease_names.append(row['disease_name'])
+        except Exception as e:
+            context.log.warning(f"Failed to parse embedding for {row['disease_name']}: {e}")
+
+    if len(embeddings_list) < 2:
+        context.log.error("Not enough valid embeddings for clustering")
+        return output_path
+
+    embeddings_matrix = np.array(embeddings_list)
+    context.log.info(f"Embeddings matrix shape: {embeddings_matrix.shape}")
+
+    # Use DBSCAN clustering based on cosine distance
+    # eps: maximum distance between two samples to be in same cluster
+    # min_samples: minimum number of samples in a cluster
+    from sklearn.cluster import DBSCAN
+    from sklearn.metrics.pairwise import cosine_distances
+
+    # Compute cosine distance matrix
+    distance_matrix = cosine_distances(embeddings_matrix)
+
+    # Cluster with DBSCAN
+    # eps=0.1 means cosine similarity >= 0.9 will be clustered together
+    # Adjust eps to control sensitivity (lower = more strict)
+    eps = 0.05
+    min_samples = 1  # Allow single-member clusters
+
+    context.log.info(f"Running DBSCAN clustering with eps={eps}")
+    clustering = DBSCAN(eps=eps, min_samples=min_samples, metric='precomputed')
+    cluster_labels = clustering.fit_predict(distance_matrix)
+
+    # Create mapping of disease to cluster
+    cluster_data = []
+    for i, (disease_name, cluster_id) in enumerate(zip(disease_names, cluster_labels)):
+        cluster_data.append({
+            'node_id': i,
+            'disease_name': disease_name,
+            'cluster_id': int(cluster_id),
+            'is_noise': cluster_id == -1
+        })
+
+    clusters_df = pl.DataFrame(cluster_data).sort('cluster_id')
+
+    # Get cluster statistics
+    num_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)
+    num_noise = sum(1 for label in cluster_labels if label == -1)
+
+    context.log.info(f"\nClustering results:")
+    context.log.info(f"  Total diseases: {len(disease_names)}")
+    context.log.info(f"  Number of clusters: {num_clusters}")
+    context.log.info(f"  Noise points (no cluster): {num_noise}")
+
+    # Show clusters with multiple members
+    context.log.info("\nClusters with multiple diseases (probably duplicates):")
+    for cluster_id in sorted(set(cluster_labels)):
+        if cluster_id == -1:  # Skip noise
+            continue
+        cluster_members = [disease_names[i] for i, label in enumerate(cluster_labels) if label == cluster_id]
+        if len(cluster_members) > 1:
+            context.log.info(f"  Cluster {cluster_id} ({len(cluster_members)} diseases):")
+            for member in cluster_members:
+                context.log.info(f"    - {member}")
+
+    # Create collapsed mapping (map each disease to its canonical representative)
+    # Use the first disease in each cluster as the canonical name
+    canonical_mapping = []
+    for cluster_id in sorted(set(cluster_labels)):
+        if cluster_id == -1:  # Noise points keep their own name
+            continue
+        cluster_members = [(i, disease_names[i]) for i, label in enumerate(cluster_labels) if label == cluster_id]
+        if cluster_members:
+            canonical_name = cluster_members[0][1]  # First disease is canonical
+            for node_id, disease_name in cluster_members:
+                canonical_mapping.append({
+                    'original_disease': disease_name,
+                    'canonical_disease': canonical_name,
+                    'cluster_id': int(cluster_id),
+                    'is_canonical': disease_name == canonical_name,
+                    'node_id': node_id
+                })
+
+    # Add noise points as their own canonical
+    for i, (disease_name, cluster_id) in enumerate(zip(disease_names, cluster_labels)):
+        if cluster_id == -1:
+            canonical_mapping.append({
+                'original_disease': disease_name,
+                'canonical_disease': disease_name,
+                'cluster_id': -1,
+                'is_canonical': True,
+                'node_id': i
+            })
+
+    mapping_df = pl.DataFrame(canonical_mapping).sort('cluster_id')
+
+    # Save both files
+    clusters_df.write_csv(output_path)
+    mapping_path = output_path.parent / "canonical_mapping.csv"
+    mapping_df.write_csv(mapping_path)
+
+    context.log.info(f"\nCluster assignments saved to: {output_path.absolute()}")
+    context.log.info(f"File URI: file://{output_path.absolute()}")
+    context.log.info(f"Canonical mapping saved to: {mapping_path.absolute()}")
+    context.log.info(f"File URI: file://{mapping_path.absolute()}")
+
+    return output_path

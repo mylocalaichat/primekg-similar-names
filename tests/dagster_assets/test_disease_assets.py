@@ -1,7 +1,7 @@
 import polars as pl
 from unittest.mock import patch, MagicMock
 from dagster import build_asset_context
-from dagster_assets.primekg_similar_names import filter_disease_nodes, disease_descriptions, disease_embeddings, disease_embeddings_viz, disease_similarity_pairs
+from dagster_assets.primekg_similar_names import filter_disease_nodes, disease_descriptions, disease_embeddings, disease_embeddings_viz, disease_similarity_pairs, disease_clusters
 
 
 def test_filter_disease_nodes(tmp_path, monkeypatch):
@@ -143,3 +143,40 @@ def test_disease_similarity_pairs(tmp_path, monkeypatch):
     assert 'node_id_1' in df_pairs.columns
     assert 'node_id_2' in df_pairs.columns
     assert len(df_pairs) == 3  # 3 diseases = 3 pairs (3 choose 2)
+
+
+def test_disease_clusters(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    # Create input embeddings file with similar and dissimilar diseases
+    embeddings_file = tmp_path / "embeddings.csv"
+    # Create embeddings: first two are similar, third is different
+    embedding1 = ','.join(['0.1'] * 10)
+    embedding2 = ','.join(['0.11'] * 10)  # Very similar to embedding1
+    embedding3 = ','.join(['0.9'] * 10)   # Different from others
+
+    df = pl.DataFrame({
+        'disease_name': ['hypertension', 'high blood pressure', 'diabetes'],
+        'description': ['desc1', 'desc2', 'desc3'],
+        'embedding': [embedding1, embedding2, embedding3]
+    })
+    df.write_csv(embeddings_file)
+
+    context = build_asset_context()
+    result = disease_clusters(context, embeddings_file)
+
+    assert result.exists()
+    df_clusters = pl.read_csv(result)
+    assert 'node_id' in df_clusters.columns
+    assert 'disease_name' in df_clusters.columns
+    assert 'cluster_id' in df_clusters.columns
+    assert 'is_noise' in df_clusters.columns
+    assert len(df_clusters) == 3
+
+    # Check that canonical mapping file was created
+    mapping_file = result.parent / "canonical_mapping.csv"
+    assert mapping_file.exists()
+    df_mapping = pl.read_csv(mapping_file)
+    assert 'original_disease' in df_mapping.columns
+    assert 'canonical_disease' in df_mapping.columns
+    assert 'is_canonical' in df_mapping.columns
