@@ -143,3 +143,79 @@ Keep it concise and factual.</s>
     context.log.info(f"Descriptions CSV saved to: {output_path.absolute()}")
 
     return output_path
+
+
+@asset(group_name="primekg_similar_names")
+def disease_embeddings(context: AssetExecutionContext, disease_descriptions: Path) -> Path:
+    output_path = Path("primekg_similar_names/disease_embeddings/asset_output/embeddings.csv")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    df = pl.read_csv(disease_descriptions)
+
+    # Model configuration - Using nomic-embed-text for embeddings
+    model_name = "nomic-embed-text-v1.5.Q4_K_M.gguf"
+    model_url = "https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q4_K_M.gguf"
+    models_dir = Path("data/models")
+    models_dir.mkdir(parents=True, exist_ok=True)
+    model_path = models_dir / model_name
+
+    # Download model if it doesn't exist
+    if not model_path.exists():
+        context.log.info(f"Model not found at {model_path}. Downloading from {model_url}")
+        response = requests.get(model_url, stream=True)
+        response.raise_for_status()
+
+        total_size = int(response.headers.get('content-length', 0))
+        with open(model_path, 'wb') as f, tqdm(total=total_size, unit='B', unit_scale=True, desc="Downloading embedding model") as pbar:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+                pbar.update(len(chunk))
+        context.log.info(f"Embedding model downloaded to: {model_path}")
+    else:
+        context.log.info(f"Using existing embedding model at: {model_path}")
+
+    # Load embedding model
+    context.log.info("Loading embedding model...")
+    llm = Llama(
+        model_path=str(model_path),
+        n_ctx=8192,  # Nomic supports 8k context
+        n_threads=8,
+        n_gpu_layers=-1,
+        embedding=True,  # Enable embedding mode
+        verbose=False,
+        n_batch=512
+    )
+    context.log.info("Embedding model loaded successfully")
+
+    context.log.info(f"Generating embeddings for {len(df)} disease descriptions")
+
+    embeddings_data = []
+    for row in tqdm(df.iter_rows(named=True), total=len(df), desc="Generating embeddings", unit="disease"):
+        try:
+            disease_name = row['disease_name']
+            description = row['description']
+
+            # Generate embedding
+            embedding = llm.embed(description)
+
+            # Store as comma-separated string for CSV
+            embedding_str = ','.join(map(str, embedding))
+
+            embeddings_data.append({
+                'disease_name': disease_name,
+                'description': description,
+                'embedding': embedding_str
+            })
+        except Exception as e:
+            context.log.warning(f"Failed to generate embedding for {row['disease_name']}: {e}")
+            embeddings_data.append({
+                'disease_name': row['disease_name'],
+                'description': row['description'],
+                'embedding': ''
+            })
+
+    result_df = pl.DataFrame(embeddings_data)
+    result_df.write_csv(output_path)
+    context.log.info(f"Embeddings CSV saved to: {output_path.absolute()}")
+
+    return output_path

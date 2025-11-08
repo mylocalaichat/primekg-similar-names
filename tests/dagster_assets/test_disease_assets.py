@@ -1,7 +1,7 @@
 import polars as pl
 from unittest.mock import patch, MagicMock
 from dagster import build_asset_context
-from dagster_assets.primekg_similar_names import filter_disease_nodes, disease_descriptions
+from dagster_assets.primekg_similar_names import filter_disease_nodes, disease_descriptions, disease_embeddings
 
 
 def test_filter_disease_nodes(tmp_path, monkeypatch):
@@ -55,3 +55,37 @@ def test_disease_descriptions(tmp_path, monkeypatch):
         assert 'description' in df_descriptions.columns
         assert len(df_descriptions) == 2
         assert set(df_descriptions['disease_name'].to_list()) == {'diabetes', 'hypertension'}
+
+
+def test_disease_embeddings(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    # Create input descriptions file
+    descriptions_file = tmp_path / "descriptions.csv"
+    df = pl.DataFrame({
+        'disease_name': ['hypertension', 'diabetes'],
+        'description': ['High blood pressure condition', 'Blood sugar disorder']
+    })
+    df.write_csv(descriptions_file)
+
+    # Create a fake embedding model file
+    models_dir = tmp_path / "data" / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    fake_model = models_dir / "nomic-embed-text-v1.5.Q4_K_M.gguf"
+    fake_model.touch()
+
+    # Mock Llama class for embeddings
+    mock_llm_instance = MagicMock()
+    mock_llm_instance.embed.return_value = [0.1, 0.2, 0.3, 0.4, 0.5]  # Mock embedding vector
+
+    with patch('dagster_assets.primekg_similar_names.Llama', return_value=mock_llm_instance):
+        context = build_asset_context()
+        result = disease_embeddings(context, descriptions_file)
+
+        assert result.exists()
+        df_embeddings = pl.read_csv(result)
+        assert 'disease_name' in df_embeddings.columns
+        assert 'description' in df_embeddings.columns
+        assert 'embedding' in df_embeddings.columns
+        assert len(df_embeddings) == 2
+        assert set(df_embeddings['disease_name'].to_list()) == {'diabetes', 'hypertension'}
