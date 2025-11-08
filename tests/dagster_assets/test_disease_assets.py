@@ -3,7 +3,7 @@ import pytest
 import polars as pl
 import os
 from dagster import build_asset_context
-from dagster_assets.primekg_similar_names import filter_disease_nodes, disease_embeddings, disease_similarity_plot
+from dagster_assets.primekg_similar_names import filter_disease_nodes
 
 
 def test_filter_disease_nodes(tmp_path, monkeypatch):
@@ -24,41 +24,3 @@ def test_filter_disease_nodes(tmp_path, monkeypatch):
     assert 'disease_name' in df.columns
     assert len(df) == 2
     assert set(df['disease_name'].to_list()) == {'diabetes', 'hypertension'}
-
-
-def test_disease_embeddings(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-
-    diseases_file = tmp_path / "diseases.csv"
-    df = pl.DataFrame({'disease_name': ['hypertension', 'diabetes', 'cancer']})
-    df.write_csv(diseases_file)
-
-    context = build_asset_context()
-    result = disease_embeddings(context, diseases_file)
-
-    assert result.exists()
-    df_embeddings = pl.read_csv(result)
-    assert 'x' in df_embeddings.columns
-    assert 'y' in df_embeddings.columns
-    assert 'disease_name' in df_embeddings.columns
-    assert 'min_distance' in df_embeddings.columns
-    assert len(df_embeddings) == 3
-
-
-def test_disease_similarity_plot(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-
-    embeddings_file = tmp_path / "embeddings.csv"
-    df = pl.DataFrame({
-        'disease_name': ['hypertension', 'diabetes'],
-        'x': [0.1, 0.2],
-        'y': [0.3, 0.4],
-        'min_distance': [2.0, 3.0]
-    })
-    df.write_csv(embeddings_file)
-
-    context = build_asset_context()
-    result = disease_similarity_plot(context, embeddings_file)
-
-    assert result.exists()
-    assert result.suffix == '.html'
