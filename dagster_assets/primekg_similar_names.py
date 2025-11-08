@@ -5,6 +5,9 @@ from dagster import AssetExecutionContext, asset
 from tqdm import tqdm
 import polars as pl
 from llama_cpp import Llama
+import numpy as np
+from sklearn.decomposition import PCA
+import plotly.express as px
 
 
 def download_file(url: str, output_path: Path) -> Path:
@@ -141,6 +144,7 @@ Keep it concise and factual.</s>
     result_df = pl.DataFrame(descriptions)
     result_df.write_csv(output_path)
     context.log.info(f"Descriptions CSV saved to: {output_path.absolute()}")
+    context.log.info(f"File URI: file://{output_path.absolute()}")
 
     return output_path
 
@@ -217,5 +221,99 @@ def disease_embeddings(context: AssetExecutionContext, disease_descriptions: Pat
     result_df = pl.DataFrame(embeddings_data)
     result_df.write_csv(output_path)
     context.log.info(f"Embeddings CSV saved to: {output_path.absolute()}")
+    context.log.info(f"File URI: file://{output_path.absolute()}")
+
+    return output_path
+
+
+@asset(group_name="primekg_similar_names")
+def disease_embeddings_viz(context: AssetExecutionContext, disease_embeddings: Path) -> Path:
+    output_path = Path("primekg_similar_names/disease_embeddings_viz/asset_output/embeddings_viz.html")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    context.log.info("Reading embeddings CSV")
+    df = pl.read_csv(disease_embeddings)
+
+    # Filter out rows with empty embeddings
+    df = df.filter(pl.col("embedding") != "")
+
+    context.log.info(f"Processing {len(df)} disease embeddings for visualization")
+
+    # Parse embeddings from comma-separated strings to numpy arrays
+    embeddings_list = []
+    disease_names = []
+    descriptions = []
+
+    for row in df.iter_rows(named=True):
+        try:
+            embedding_str = row['embedding']
+            embedding = np.array([float(x) for x in embedding_str.split(',')])
+            embeddings_list.append(embedding)
+            disease_names.append(row['disease_name'])
+            descriptions.append(row['description'][:100] + '...' if len(row['description']) > 100 else row['description'])
+        except Exception as e:
+            context.log.warning(f"Failed to parse embedding for {row['disease_name']}: {e}")
+
+    if len(embeddings_list) < 2:
+        context.log.error("Not enough valid embeddings for visualization")
+        return output_path
+
+    embeddings_matrix = np.array(embeddings_list)
+    context.log.info(f"Embeddings matrix shape: {embeddings_matrix.shape}")
+
+    # Reduce to 3D using PCA
+    context.log.info("Reducing embeddings to 3D using PCA")
+    pca = PCA(n_components=3, random_state=42)
+    embeddings_3d = pca.fit_transform(embeddings_matrix)
+
+    context.log.info(f"Explained variance ratio: {pca.explained_variance_ratio_.sum():.2%}")
+
+    # Create DataFrame for plotting
+    viz_df = pl.DataFrame({
+        'disease_name': disease_names,
+        'description': descriptions,
+        'x': embeddings_3d[:, 0],
+        'y': embeddings_3d[:, 1],
+        'z': embeddings_3d[:, 2]
+    })
+
+    # Add node IDs (index)
+    viz_df = viz_df.with_columns(
+        pl.Series("node_id", range(len(viz_df)))
+    )
+
+    # Create 3D scatter plot
+    context.log.info("Creating 3D visualization")
+    fig = px.scatter_3d(
+        viz_df,
+        x='x',
+        y='y',
+        z='z',
+        hover_data=['node_id', 'disease_name'],
+        title='Disease Embeddings Visualization (3D PCA)',
+        labels={'x': 'PC1', 'y': 'PC2', 'z': 'PC3'},
+        color='disease_name',
+        height=800
+    )
+
+    fig.update_traces(
+        marker=dict(size=5, opacity=0.8),
+        hovertemplate='<b>Node ID:</b> %{customdata[0]}<br><b>Name:</b> %{customdata[1]}<extra></extra>'
+    )
+
+    fig.update_layout(
+        showlegend=False,
+        hovermode='closest',
+        scene=dict(
+            xaxis_title='Principal Component 1',
+            yaxis_title='Principal Component 2',
+            zaxis_title='Principal Component 3'
+        )
+    )
+
+    fig.write_html(output_path)
+    file_uri = f"file://{output_path.absolute()}"
+    context.log.info(f"Visualization saved to: {output_path.absolute()}")
+    context.log.info(f"Open in browser: {file_uri}")
 
     return output_path

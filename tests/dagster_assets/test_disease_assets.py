@@ -1,7 +1,7 @@
 import polars as pl
 from unittest.mock import patch, MagicMock
 from dagster import build_asset_context
-from dagster_assets.primekg_similar_names import filter_disease_nodes, disease_descriptions, disease_embeddings
+from dagster_assets.primekg_similar_names import filter_disease_nodes, disease_descriptions, disease_embeddings, disease_embeddings_viz
 
 
 def test_filter_disease_nodes(tmp_path, monkeypatch):
@@ -89,3 +89,27 @@ def test_disease_embeddings(tmp_path, monkeypatch):
         assert 'embedding' in df_embeddings.columns
         assert len(df_embeddings) == 2
         assert set(df_embeddings['disease_name'].to_list()) == {'diabetes', 'hypertension'}
+
+
+def test_disease_embeddings_viz(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    # Create input embeddings file with mock embeddings (768 dimensions)
+    embeddings_file = tmp_path / "embeddings.csv"
+    # Create a simple 5-dimensional embedding for testing
+    embedding1 = ','.join(['0.1'] * 5)
+    embedding2 = ','.join(['0.2'] * 5)
+    embedding3 = ','.join(['0.3'] * 5)
+
+    df = pl.DataFrame({
+        'disease_name': ['hypertension', 'diabetes', 'cancer'],
+        'description': ['High blood pressure', 'Blood sugar disorder', 'Abnormal cell growth'],
+        'embedding': [embedding1, embedding2, embedding3]
+    })
+    df.write_csv(embeddings_file)
+
+    context = build_asset_context()
+    result = disease_embeddings_viz(context, embeddings_file)
+
+    assert result.exists()
+    assert result.suffix == '.html'
