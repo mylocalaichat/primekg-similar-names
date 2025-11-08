@@ -1,0 +1,17 @@
+[project]
+name = "primekg-similar-names"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.12"
+dependencies = [
+    "dagster>=1.12.1",
+    "dagster-webserver>=1.12.1",
+    "requests>=2.32.5",
+    "tqdm>=4.67.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.2",
+    "pytest-mock>=3.15.1",
+]
