@@ -1,5 +1,5 @@
 import polars as pl
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 from dagster import build_asset_context
 from dagster_assets.primekg_similar_names import filter_disease_nodes, disease_descriptions
 
@@ -31,14 +31,21 @@ def test_disease_descriptions(tmp_path, monkeypatch):
     df = pl.DataFrame({'disease_name': ['hypertension', 'diabetes']})
     df.write_csv(diseases_file)
 
-    # Mock ollama.chat to avoid actual API calls
-    mock_response = {
-        'message': {
-            'content': 'A chronic condition characterized by high blood pressure.'
-        }
+    # Create a fake model file
+    models_dir = tmp_path / "data" / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    fake_model = models_dir / "Qwen3-4B-Q4_K_M.gguf"
+    fake_model.touch()
+
+    # Mock Llama class to avoid loading actual model
+    mock_llm_instance = MagicMock()
+    mock_llm_instance.return_value = {
+        'choices': [{
+            'text': 'A chronic condition characterized by high blood pressure.'
+        }]
     }
 
-    with patch('ollama.chat', return_value=mock_response):
+    with patch('dagster_assets.primekg_similar_names.Llama', return_value=mock_llm_instance):
         context = build_asset_context()
         result = disease_descriptions(context, diseases_file)
 

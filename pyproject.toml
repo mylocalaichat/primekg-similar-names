@@ -6,7 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     "dagster>=1.12.1",
     "dagster-webserver>=1.12.1",
-    "ollama>=0.6.0",
+    "llama-cpp-python>=0.3.16",
     "plotly>=6.4.0",
     "polars>=1.35.1",
     "python-levenshtein>=0.27.3",
