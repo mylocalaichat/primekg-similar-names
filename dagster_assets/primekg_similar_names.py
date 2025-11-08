@@ -98,7 +98,7 @@ def disease_embeddings(context: AssetExecutionContext, filter_disease_nodes: Pat
         pl.Series("x", embeddings[:, 0]),
         pl.Series("y", embeddings[:, 1]),
         pl.Series("min_distance", min_distances)
-    ])
+    ]).sort("min_distance")
 
     df.write_csv(output_path)
     context.log.info(f"CSV saved to: {output_path.absolute()}")
