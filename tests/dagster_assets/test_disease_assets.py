@@ -34,7 +34,7 @@ def test_disease_descriptions(tmp_path, monkeypatch):
     # Create a fake model file
     models_dir = tmp_path / "data" / "models"
     models_dir.mkdir(parents=True, exist_ok=True)
-    fake_model = models_dir / "Qwen3-4B-Q4_K_M.gguf"
+    fake_model = models_dir / "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
     fake_model.touch()
 
     # Mock Llama class to avoid loading actual model

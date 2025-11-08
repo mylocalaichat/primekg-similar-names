@@ -50,10 +50,10 @@ def filter_disease_nodes(context: AssetExecutionContext, download_kg: Path) -> P
     diseases = pl.concat([
         x_diseases.rename({"x_name": "disease_name"}),
         y_diseases.rename({"y_name": "disease_name"})
-    ]).unique().sort("disease_name")
+    ]).unique().sort("disease_name").head(100)
 
     diseases.write_csv(output_path)
-    context.log.info(f"CSV saved to: {output_path.absolute()}")
+    context.log.info(f"CSV saved to: {output_path.absolute()} (limited to 100 records)")
 
     return output_path
 
@@ -66,9 +66,9 @@ def disease_descriptions(context: AssetExecutionContext, filter_disease_nodes: P
     df = pl.read_csv(filter_disease_nodes)
     disease_names = df['disease_name'].to_list()
 
-    # Model configuration
-    model_name = "Qwen3-4B-Q4_K_M.gguf"
-    model_url = "https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf"
+    # Model configuration - Using TinyLlama 1.1B for speed
+    model_name = "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
+    model_url = "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
     models_dir = Path("data/models")
     models_dir.mkdir(parents=True, exist_ok=True)
     model_path = models_dir / model_name
@@ -92,9 +92,10 @@ def disease_descriptions(context: AssetExecutionContext, filter_disease_nodes: P
     context.log.info("Loading LLM model...")
     llm = Llama(
         model_path=str(model_path),
-        n_ctx=2048,
+        n_ctx=2048,  # TinyLlama context window
         n_threads=8,
-        n_gpu_layers=-1,  # Use GPU if available
+        n_gpu_layers=-1,  # Use all GPU layers if available
+        n_batch=512,  # Batch size for prompt processing
         verbose=False
     )
     context.log.info("Model loaded successfully")
@@ -104,21 +105,27 @@ def disease_descriptions(context: AssetExecutionContext, filter_disease_nodes: P
     descriptions = []
     for disease_name in tqdm(disease_names, desc="Fetching disease descriptions", unit="disease"):
         try:
-            prompt = f"""Provide a comprehensive medical description of {disease_name} in approximately 500 words. Include:
-1. What the disease is and its medical definition
-2. Common symptoms and clinical presentation
-3. Known causes and risk factors
-4. How it's typically diagnosed
-5. Available treatment options and management strategies
-6. Prognosis and potential complications
+            # Using TinyLlama chat format
+            prompt = f"""<|system|>
+You are a medical expert assistant.</s>
+<|user|>
+Write a brief medical description of the disease: {disease_name}
 
-Be factual, medically accurate, and detailed."""
+Include:
+- What the disease is
+- Main symptoms
+- Causes
+- Treatment options
+
+Keep it concise and factual.</s>
+<|assistant|>
+"""
 
             output = llm(
                 prompt,
-                max_tokens=1024,
-                temperature=0.7,
-                stop=["</s>", "\n\n\n"],
+                max_tokens=256,  # Reduced for faster, more focused generation
+                temperature=0.3,  # Lower temperature for more factual responses
+                stop=["</s>", "<|user|>", "<|system|>"],
                 echo=False
             )
             description = output['choices'][0]['text'].strip()
